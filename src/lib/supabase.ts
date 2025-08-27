@@ -7,6 +7,10 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables');
 }
 
+// Reverted to the standard Supabase client initialization.
+// The previous custom fetch with a proxy caused the dev server to crash
+// due to environment variable constraints. The underlying CORS issue
+// must be resolved in the Supabase dashboard settings.
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // أنواع البيانات لـ Supabase

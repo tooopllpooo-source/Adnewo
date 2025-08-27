@@ -1,0 +1,133 @@
+/*
+# [Full Database Schema Setup]
+This script creates the complete database schema required for the Adnewo application. It sets up tables for user profiles, API credentials, campaigns, and generated scripts. It also configures a trigger to automatically create a user profile upon sign-up and enables Row Level Security (RLS) on all tables to ensure data privacy.
+
+## Query Description: [This script will create several new tables and enable security policies. It is designed to be run on an empty or fresh database. If you have existing tables with the same names, this script might fail. It is safe to run as it does not delete any existing user data from auth.users.]
+
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["High"]
+- Requires-Backup: [false]
+- Reversible: [false]
+
+## Structure Details:
+- Tables Created: profiles, api_credentials, campaigns, generated_scripts
+- Functions Created: handle_new_user
+- Triggers Created: on_auth_user_created on auth.users
+
+## Security Implications:
+- RLS Status: [Enabled]
+- Policy Changes: [Yes]
+- Auth Requirements: [Requires authenticated users for all data access]
+
+## Performance Impact:
+- Indexes: [Primary keys and foreign keys are indexed]
+- Triggers: [Adds one trigger on auth.users table for new user creation]
+- Estimated Impact: [Low performance impact, standard setup for user-based applications.]
+*/
+
+-- 1. PROFILES TABLE
+-- Stores public user data.
+create table if not exists public.profiles (
+  id uuid references auth.users on delete cascade not null primary key,
+  updated_at timestamp with time zone,
+  full_name text,
+  avatar_url text
+);
+-- Add comments to the table and columns
+comment on table public.profiles is 'Public profile information for each user.';
+comment on column public.profiles.id is 'References the internal Supabase user.';
+
+-- 2. SETUP RLS FOR PROFILES
+-- Secure the profiles table.
+alter table public.profiles enable row level security;
+-- Allow users to see their own profile.
+create policy "Users can view their own profile." on public.profiles for select
+  using (auth.uid() = id);
+-- Allow users to update their own profile.
+create policy "Users can update their own profile." on public.profiles for update
+  using (auth.uid() = id);
+
+-- 3. AUTOMATIC PROFILE CREATION
+-- This function is triggered when a new user signs up.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, full_name, avatar_url)
+  values (new.id, new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'avatar_url');
+  return new;
+end;
+$$;
+-- Create the trigger to call the function
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+-- 4. API CREDENTIALS TABLE
+-- Stores encrypted Adsterra API credentials for each user.
+create table if not exists public.api_credentials (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users on delete cascade not null,
+  api_key_encrypted text not null,
+  publisher_id text not null,
+  endpoint text not null default 'https://api.adsterra.com/v1',
+  is_active boolean not null default true,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+comment on table public.api_credentials is 'Stores encrypted API credentials for Adsterra.';
+
+-- 5. SETUP RLS FOR API CREDENTIALS
+alter table public.api_credentials enable row level security;
+create policy "Users can manage their own API credentials." on public.api_credentials for all
+  using (auth.uid() = user_id);
+
+-- 6. CAMPAIGNS TABLE
+-- Caches campaign data fetched from Adsterra API.
+create table if not exists public.campaigns (
+  id text not null,
+  user_id uuid references auth.users on delete cascade not null,
+  name text not null,
+  url text not null,
+  cpm numeric not null,
+  country text not null,
+  device text not null,
+  category text not null,
+  status text not null,
+  impressions integer not null default 0,
+  clicks integer not null default 0,
+  revenue numeric not null default 0,
+  is_selected boolean not null default false,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  primary key (id, user_id)
+);
+comment on table public.campaigns is 'Caches campaign data from Adsterra for each user.';
+
+-- 7. SETUP RLS FOR CAMPAIGNS
+alter table public.campaigns enable row level security;
+create policy "Users can manage their own campaigns." on public.campaigns for all
+  using (auth.uid() = user_id);
+
+-- 8. GENERATED SCRIPTS TABLE
+-- Stores popunder scripts generated by users.
+create table if not exists public.generated_scripts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users on delete cascade not null,
+  name text not null,
+  script_code text not null,
+  config jsonb not null,
+  campaign_ids text[] not null,
+  script_type text not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+comment on table public.generated_scripts is 'Stores scripts generated by users.';
+
+-- 9. SETUP RLS FOR GENERATED SCRIPTS
+alter table public.generated_scripts enable row level security;
+create policy "Users can manage their own scripts." on public.generated_scripts for all
+  using (auth.uid() = user_id);
